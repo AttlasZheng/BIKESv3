@@ -1,0 +1,224 @@
+---
+- name: Start GPS motion soundscapes on four BIKES nodes
+  hosts: bikes
+  gather_facts: false
+  become: true
+
+  vars:
+    soundscape: "marine"
+    remote_app_dir: "/home/{{ ansible_user }}/Desktop/BIKES/concepts/gps_motion"
+    media_dir: "/home/{{ ansible_user }}/Desktop/BIKES/media/gps_motion/samples/{{ soundscape }}"
+    gui_user: "{{ ansible_user }}"
+    gps_port: "{{ gps_serial_port | default('/dev/ttyUSB0') }}"
+    baud_rate: 9600
+    jack_hw_device: "{{ bikes_audio_device | default('hw:2,0') }}"
+    peer_port: 57121
+    sample_count: 4
+    amp: 0.3
+    fade_time: 0.2
+    rhythm_amp: 0.22
+    default_rate: 1.0
+    min_rate: 0.6
+    max_rate: 1.5
+    rate_gain: 0.4
+    rate_attack: 3.0
+    rate_return: 4.0
+    rhythm_only: false
+    accel_threshold: 0.4
+    decel_threshold: 0.4
+    turn_rate: 10.0
+    turn_angle: 25.0
+    min_turn_speed: 0.5
+    confirm_samples: 2
+    cooldown: 5.0
+    match_window: 8.0
+    settle_time: 0.6
+    window: 2.5
+    min_span: 1.0
+    smoothing: 0.8
+    max_hdop: 4.0
+    min_satellites: 4
+    install_dependencies: false
+    ready_file: "{{ remote_app_dir }}/gps_motion.ready"
+    bikes_ips:
+      "1": "10.10.10.11"
+      "2": "10.10.10.12"
+      "3": "10.10.10.13"
+      "4": "10.10.10.14"
+
+  tasks:
+    - name: Validate inventory node identity and theme
+      ansible.builtin.assert:
+        that:
+          - ansible_user in ['bikes1', 'bikes2', 'bikes3', 'bikes4']
+          - groups['bikes'] | length == 4
+          - soundscape is match('^[A-Za-z0-9_-]+$')
+          - sample_count | int > 0
+          - match_window | float > settle_time | float
+        fail_msg: "Use bikes1..bikes4 users and a simple soundscape folder name."
+
+    - name: Install Python and audio packages when explicitly enabled
+      ansible.builtin.apt:
+        name: [python3, python3-pip, python3-venv, jackd2, supercollider]
+        state: present
+        update_cache: true
+      when: install_dependencies | bool
+
+    - name: Install isolated GPS Python dependencies when enabled
+      become: false
+      ansible.builtin.pip:
+        name: [pyserial, python-osc]
+        virtualenv: "{{ remote_app_dir }}/.venv"
+        virtualenv_command: "python3 -m venv"
+      when: install_dependencies | bool
+
+    - name: Resolve Python interpreter (virtualenv or existing system install)
+      ansible.builtin.stat:
+        path: "{{ remote_app_dir }}/.venv/bin/python"
+      register: gps_venv
+
+    - name: Set Python interpreter
+      ansible.builtin.set_fact:
+        python_bin: "{{ (remote_app_dir + '/.venv/bin/python') if gps_venv.stat.exists else '/usr/bin/python3' }}"
+
+    - name: Verify scripts and every required WAV before stopping audio
+      become: false
+      ansible.builtin.shell: |
+        set -eu
+        test -f {{ (remote_app_dir + '/GPSListener.scd') | quote }}
+        test -f {{ (remote_app_dir + '/PixelGPS.py') | quote }}
+        test -f {{ (media_dir + '/rhythm/0.wav') | quote }} || test -f {{ (media_dir + '/base/0.wav') | quote }}
+        command -v sclang
+        command -v jackd
+        {{ python_bin | quote }} -c 'import serial; import pythonosc'
+        for kind in accelerate decelerate turn_left turn_right; do
+          number=0
+          while [ "$number" -lt {{ sample_count | int }} ]; do
+            test -f {{ media_dir | quote }}/"$kind"/"$number.wav"
+            number=$((number + 1))
+          done
+        done
+      changed_when: false
+
+    - name: Verify GPS serial port permissions for the bike user
+      become: false
+      ansible.builtin.shell: |
+        test -r {{ gps_port | quote }} && test -w {{ gps_port | quote }}
+      changed_when: false
+
+    - name: Show resolved node configuration
+      ansible.builtin.debug:
+        msg: "{{ ansible_user }}: GPS={{ gps_port }} baud={{ baud_rate }} theme={{ soundscape }}"
+
+    - name: Stop previous GPS reader only
+      become: false
+      ansible.builtin.command:
+        argv: [pkill, -TERM, -f, "[P]ixelGPS.py"]
+      register: gps_stop
+      failed_when: gps_stop.rc not in [0, 1]
+      changed_when: gps_stop.rc == 0
+
+    - name: Reset existing audio stack (same behavior as the original concept)
+      become: false
+      ansible.builtin.command:
+        argv: [pkill, -TERM, -x, "{{ item }}"]
+      loop: [sclang, scsynth, jackd]
+      register: audio_stop
+      failed_when: audio_stop.rc not in [0, 1]
+      changed_when: audio_stop.rc == 0
+
+    - name: Remove stale readiness marker
+      become: false
+      ansible.builtin.file:
+        path: "{{ ready_file }}"
+        state: absent
+
+    - name: Pause for audio processes to stop
+      ansible.builtin.pause:
+        seconds: 2
+
+    - name: Verify peer OSC port is available
+      become: false
+      ansible.builtin.command:
+        argv:
+          - "{{ python_bin }}"
+          - -c
+          - "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('0.0.0.0', {{ peer_port | int }})); s.close()"
+      changed_when: false
+
+    - name: Start JACK
+      become: false
+      ansible.builtin.shell: |
+        cd {{ remote_app_dir | quote }}
+        nohup jackd -d alsa -d {{ jack_hw_device | quote }} -r 48000 -p 256 \
+          > jack_log.txt 2>&1 < /dev/null &
+        echo $! > jack.pid
+      args:
+        executable: /bin/bash
+
+    - name: Pause briefly for JACK
+      ansible.builtin.pause:
+        seconds: 2
+
+    - name: Start SuperCollider GPS file player
+      become: false
+      ansible.builtin.shell: |
+        cd {{ remote_app_dir | quote }}
+        nohup env HOME={{ ('/home/' + ansible_user) | quote }} QT_QPA_PLATFORM=offscreen \
+          sclang {{ (remote_app_dir + '/GPSListener.scd') | quote }} \
+          {{ soundscape | quote }} {{ sample_count | int }} {{ ready_file | quote }} \
+          {{ amp | float }} {{ fade_time | float }} {{ rhythm_amp | float }} \
+          > sc_log.txt 2>&1 < /dev/null &
+        echo $! > sc.pid
+      args:
+        executable: /bin/bash
+
+    - name: Wait until buffers and OSC listener are ready
+      become: false
+      ansible.builtin.wait_for:
+        path: "{{ ready_file }}"
+        state: present
+        timeout: 120
+
+    - name: Start GPS reader and direct peer OSC communication
+      become: false
+      ansible.builtin.shell: |
+        cd {{ remote_app_dir | quote }}
+        nohup {{ python_bin | quote }} -u {{ (remote_app_dir + '/PixelGPS.py') | quote }} \
+          {{ soundscape | quote }} --host {{ (ansible_user | regex_replace('^bikes', '')) | quote }} \
+          --gps-port {{ gps_port | quote }} --baud-rate {{ baud_rate | int }} \
+          --sample-count {{ sample_count | int }} --peer-port {{ peer_port | int }} \
+          --accel-threshold {{ accel_threshold | float }} --decel-threshold {{ decel_threshold | float }} \
+          --turn-rate {{ turn_rate | float }} --turn-angle {{ turn_angle | float }} \
+          --min-turn-speed {{ min_turn_speed | float }} --confirm-samples {{ confirm_samples | int }} \
+          --cooldown {{ cooldown | float }} --match-window {{ match_window | float }} \
+          --settle-time {{ settle_time | float }} --window {{ window | float }} \
+          --min-span {{ min_span | float }} --smoothing {{ smoothing | float }} \
+          --default-rate {{ default_rate | float }} --min-rate {{ min_rate | float }} \
+          --max-rate {{ max_rate | float }} --rate-gain {{ rate_gain | float }} \
+          --rate-attack {{ rate_attack | float }} --rate-return {{ rate_return | float }} \
+          {{ '--rhythm-only' if rhythm_only | bool else '' }} \
+          --max-hdop {{ max_hdop | float }} --min-satellites {{ min_satellites | int }} \
+          --peer {{ ('1=' + bikes_ips['1']) | quote }} --peer {{ ('2=' + bikes_ips['2']) | quote }} \
+          --peer {{ ('3=' + bikes_ips['3']) | quote }} --peer {{ ('4=' + bikes_ips['4']) | quote }} \
+          > gps_log.txt 2>&1 < /dev/null &
+        echo $! > gps.pid
+      args:
+        executable: /bin/bash
+
+    - name: Pause for GPS reader startup
+      ansible.builtin.pause:
+        seconds: 2
+
+    - name: Confirm launched processes have not exited
+      become: false
+      ansible.builtin.shell: |
+        cd {{ remote_app_dir | quote }}
+        kill -0 "$(cat gps.pid)"
+        kill -0 "$(cat sc.pid)"
+        kill -0 "$(cat jack.pid)"
+      register: gps_started
+      retries: 3
+      delay: 2
+      until: gps_started.rc == 0
+      changed_when: false
