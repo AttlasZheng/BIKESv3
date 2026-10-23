@@ -20,5 +20,11 @@
         python-osc
         pygame
         --break-system-packages
+    
+    - name: Let the bike user read the GPS serial port
+      user:
+        name: "{{ ansible_user }}"
+        groups: dialout
+        append: true
 
         
