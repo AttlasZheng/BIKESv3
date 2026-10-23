@@ -14,17 +14,21 @@
         state: present
         update_cache: yes
 
-    - name: Install python-osc and pygame system-wide
+    - name: Install python-osc, pygame and pyserial system-wide
       command: >
         pip3 install
         python-osc
         pygame
+        pyserial
         --break-system-packages
-    
+
     - name: Let the bike user read the GPS serial port
       user:
         name: "{{ ansible_user }}"
         groups: dialout
         append: true
 
-        
+    - name: Verify python packages import
+      become: false
+      command: python3 -c "import serial, pythonosc, pygame"
+      changed_when: false
