@@ -1,0 +1,83 @@
+---
+- name: Start GPS motion concept
+  hosts: bikes
+  gather_facts: false
+  become: true
+
+  vars:
+    soundscape: "marine"     # theme folder under media/gps_motion/samples/
+    gps_port: "/dev/ttyUSB0" # override if a bike's GPS shows up as /dev/ttyACM0
+    remote_app_dir: "/home/{{ ansible_user }}/Desktop/BIKES/concepts/BIKES_GPS_Motion"
+
+  tasks:
+    - name: Show resolved remote app directory
+      debug:
+        msg: "Host {{ ansible_user }} using remote_app_dir={{ remote_app_dir }} soundscape={{ soundscape }} gps={{ gps_port }}"
+
+    - name: Kill all SuperCollider things
+      command: killall -9 sclang scsynth
+      ignore_errors: true
+
+    - name: Kill p2psc
+      command: killall -9 p2psc
+      ignore_errors: true
+
+    - name: Kill all JackTrip things
+      command: killall -9 jacktrip
+      ignore_errors: true
+
+    - name: Kill all qjacks
+      command: killall -9 qjackctl
+      ignore_errors: true
+
+    - name: Kill all jackd things
+      command: killall -9 jackd
+      ignore_errors: true
+
+    - name: Kill all python3 things
+      command: killall -9 python3
+      ignore_errors: true
+
+    - name: Start jack
+      become: false
+      shell: |
+        jackd -d alsa -d hw:2,0 &
+      async: 2592000
+      poll: 0
+
+    - name: Pause briefly
+      pause:
+        seconds: 2
+
+    - name: Run SC script
+      become: false
+      shell: |
+        cd "{{ remote_app_dir }}" && \
+        env \
+          HOME="/home/{{ ansible_user }}" \
+          DISPLAY=":0" \
+          XAUTHORITY="/home/{{ ansible_user }}/.Xauthority" \
+          nohup sclang "{{ remote_app_dir }}/GPSListener.scd" "{{ soundscape }}" > sc_log.txt 2>&1 &
+      async: 2592000
+      poll: 0
+
+    - name: Wait for scsynth to appear
+      shell: pgrep -af scsynth
+      register: scsynth_check
+      retries: 10
+      delay: 1
+      until: scsynth_check.rc == 0
+
+    - name: Extra pause for samples to load
+      pause:
+        seconds: 5
+
+    # Must run as the bike user (become: false): PixelGPS.py gets its bike number from bikes1..bikes4.
+    - name: Launch GPS script
+      become: false
+      shell: |
+        cd "{{ remote_app_dir }}" && \
+        nohup python3 -u "{{ remote_app_dir }}/PixelGPS.py" "{{ soundscape }}" \
+          --gps-port "{{ gps_port }}" > gps_log.txt 2>&1 &
+      async: 2592000
+      poll: 0
