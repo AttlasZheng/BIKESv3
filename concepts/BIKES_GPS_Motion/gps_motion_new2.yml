@@ -1,0 +1,146 @@
+---
+- name: Start GPS motion concept
+  hosts: bikes
+  gather_facts: false
+  become: true
+
+  vars:
+    soundscape: "marine"
+    sample_count: 4
+
+    remote_app_dir: "/home/{{ ansible_user }}/Desktop/BIKES/concepts/BIKES_GPS_Motion"
+    gps_port: "{{ gps_serial_port | default('/dev/ttyUSB0') }}"
+    baud_rate: 9600
+    jack_hw_device: "{{ bikes_audio_device | default('hw:2,0') }}"
+    ready_file: "{{ remote_app_dir }}/gps_motion.ready"
+
+    peer_port: 57121
+    bikes_ips:
+      "1": "10.10.10.11"
+      "2": "10.10.10.12"
+      "3": "10.10.10.13"
+      "4": "10.10.10.14"
+
+    accel_threshold: 0.4
+    decel_threshold: 0.4
+    turn_rate: 10.0
+    turn_angle: 25.0
+    min_turn_speed: 0.5
+    window: 2.5
+    min_span: 1.0
+    smoothing: 0.8
+    confirm_samples: 2
+    cooldown: 5.0
+    match_window: 8.0
+    settle_time: 0.6
+    max_hdop: 4.0
+    min_satellites: 4
+
+    default_rate: 1.0
+    min_rate: 0.6
+    max_rate: 1.5
+    rate_gain: 0.4
+    rate_attack: 3.0
+    rate_return: 4.0
+    rhythm_only: false
+
+    amp: 0.3
+    fade_time: 0.2
+    rhythm_amp: 0.22
+
+  tasks:
+    - name: Show resolved remote app directory
+      debug:
+        msg: "Host {{ ansible_user }} using remote_app_dir={{ remote_app_dir }} soundscape={{ soundscape }} gps={{ gps_port }} audio={{ jack_hw_device }}"
+
+    - name: Kill all SuperCollider things
+      command: killall -9 sclang scsynth
+      ignore_errors: true
+
+    - name: Kill p2psc
+      command: killall -9 p2psc
+      ignore_errors: true
+
+    - name: Kill all JackTrip things
+      command: killall -9 jacktrip
+      ignore_errors: true
+
+    - name: Kill all qjacks
+      command: killall -9 qjackctl
+      ignore_errors: true
+
+    - name: Kill all jackd things
+      command: killall -9 jackd
+      ignore_errors: true
+
+    - name: Kill all python3 things
+      command: killall -9 python3
+      ignore_errors: true
+
+    - name: Remove stale SC ready file
+      file:
+        path: "{{ ready_file }}"
+        state: absent
+
+    - name: Start jack
+      become: false
+      shell: |
+        cd "{{ remote_app_dir }}" && \
+        jackd -d alsa -d {{ jack_hw_device }} > jack_log.txt 2>&1 &
+      async: 2592000
+      poll: 0
+
+    - name: Pause briefly
+      pause:
+        seconds: 2
+
+    - name: Run SC script
+      become: false
+      shell: |
+        cd "{{ remote_app_dir }}" && \
+        env \
+          HOME="/home/{{ ansible_user }}" \
+          DISPLAY=":0" \
+          XAUTHORITY="/home/{{ ansible_user }}/.Xauthority" \
+          nohup sclang "{{ remote_app_dir }}/GPSListener.scd" \
+            "{{ soundscape }}" {{ sample_count }} "{{ ready_file }}" \
+            {{ amp }} {{ fade_time }} {{ rhythm_amp }} \
+          > sc_log.txt 2>&1 &
+      async: 2592000
+      poll: 0
+
+    - name: Wait for scsynth to appear
+      shell: pgrep -af scsynth
+      register: scsynth_check
+      retries: 10
+      delay: 1
+      until: scsynth_check.rc == 0
+
+    - name: Wait for SC to load samples and start listening
+      wait_for:
+        path: "{{ ready_file }}"
+        timeout: 120
+
+    - name: Launch GPS script
+      become: false
+      shell: |
+        cd "{{ remote_app_dir }}" && \
+        nohup python3 -u "{{ remote_app_dir }}/PixelGPS.py" "{{ soundscape }}" \
+          --gps-port "{{ gps_port }}" --baud-rate {{ baud_rate }} \
+          --sample-count {{ sample_count }} --peer-port {{ peer_port }} \
+          --peer "1={{ bikes_ips['1'] }}" --peer "2={{ bikes_ips['2'] }}" \
+          --peer "3={{ bikes_ips['3'] }}" --peer "4={{ bikes_ips['4'] }}" \
+          --accel-threshold {{ accel_threshold }} --decel-threshold {{ decel_threshold }} \
+          --turn-rate {{ turn_rate }} --turn-angle {{ turn_angle }} \
+          --min-turn-speed {{ min_turn_speed }} --window {{ window }} \
+          --min-span {{ min_span }} --smoothing {{ smoothing }} \
+          --confirm-samples {{ confirm_samples }} --cooldown {{ cooldown }} \
+          --match-window {{ match_window }} --settle-time {{ settle_time }} \
+          --max-hdop {{ max_hdop }} --min-satellites {{ min_satellites }} \
+          --default-rate {{ default_rate }} --min-rate {{ min_rate }} \
+          --max-rate {{ max_rate }} --rate-gain {{ rate_gain }} \
+          --rate-attack {{ rate_attack }} --rate-return {{ rate_return }} \
+          {{ '--rhythm-only' if rhythm_only | bool else '' }} \
+          > gps_log.txt 2>&1 &
+      async: 2592000
+      poll: 0
