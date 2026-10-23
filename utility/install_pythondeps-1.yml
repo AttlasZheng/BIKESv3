@@ -1,0 +1,34 @@
+---
+- name: Force-install python packages with pip (no venv)
+  hosts: all
+  become: true
+
+  tasks:
+
+    - name: Ensure pip is installed
+      apt:
+        name:
+          - python3-pip
+          - python3-setuptools
+          - python3-wheel
+        state: present
+        update_cache: yes
+
+    - name: Install python-osc, pygame and pyserial system-wide
+      command: >
+        pip3 install
+        python-osc
+        pygame
+        pyserial
+        --break-system-packages
+
+    - name: Let the bike user read the GPS serial port
+      user:
+        name: "{{ ansible_user }}"
+        groups: dialout
+        append: true
+
+    - name: Verify python packages import
+      become: false
+      command: python3 -c "import serial, pythonosc, pygame"
+      changed_when: false
