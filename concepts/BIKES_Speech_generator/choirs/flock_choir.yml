@@ -1,0 +1,27 @@
+# =====================================================================
+# BIKES Speech generator: Performance Configuration Profile
+# =====================================================================
+
+# Global Parameters
+speed: 0.75                  # Tempo multiplier
+
+# Cadence Coupling (Voice Blending Ratio)
+# 1.0 = no coupling (uses target voice prosody)
+# 0.0 = all the same (forces complete reference prosody)
+coupling_weight: 0.99
+
+# Reference voice (Conductor)
+# Dictates the exact microsecond start/stop timing of the text blocks
+reference_voice: "af_nicole"
+
+choir_voices:
+  # --- British English (BE) Voices ---
+  # Female
+  - "bf_isabella"   # v1  - perfect, calm[cite: 1]
+  # Made
+  - "bm_lewis"      # v2  - rich, authoritative bass[cite: 1]
+  # --- American English (AE) Voices ---
+  # Female
+  - "af_alloy"      # v3  - balanced, neutral[cite: 1]
+  # Male
+  - "am_adam"       # v4 - deep, chesty bass[cite: 1]

@@ -1,0 +1,13 @@
+Person detected.
+
+You are entering a surveilled area.
+
+Please dismount your bike. You are being monitored.
+
+Vehicle detected.
+
+Your license plate has been recorded.
+
+This is a surveilled area.
+
+A Flock camera is watching this street.

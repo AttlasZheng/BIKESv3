@@ -3,6 +3,8 @@ BIKES Flocking: camera and GPS events -> spoken announcements
 
 Speech files: <project>/media/flock/sentence_N_voice_M.wav (mono or stereo)
 Which sentence belongs to which event: sentences.txt in this folder (N|event|text)
+Each sentence has 28 voices numbered 0 through 27. Every accepted trigger
+randomly selects an available voice for the selected sentence. Repeats are allowed.
 
 OSC, one int argument, 1 = entered / present, 0 = left / absent:
     /object/detected/person   from flock_camera.py
@@ -17,7 +19,7 @@ Stop and release resources: ~flockStop.value;
 Reevaluate the block to restart.
 */
 (
-var config, addresses, scriptPath, mediaPath, sentencesPath, bike, server, state;
+var config, addresses, scriptPath, mediaPath, sentencesPath, server, state;
 var readSentences, scanMedia, cleanup, pickSentence, pickVoice, playSpeech, trigger, receive;
 
 config = (
@@ -26,7 +28,7 @@ config = (
     out: 0,                    // stereo output channels 0 and 1
     cooldown: (person: 8, car: 8, flock: 20),  // seconds per event
     enabled: (person: true, car: true, flock: true),  // stationary vs moving mode
-    voiceMode: \random,        // \random, or \bike: voice number = bike number
+    voiceIds: (0..27),         // 28 voices; use (1..28) for filenames numbered 1-28
     order: \random             // \random, or \sequence through the event's sentences
 );
 
@@ -43,7 +45,6 @@ if(scriptPath.isNil) {
 scriptPath = File.realpath(scriptPath).dirname;
 mediaPath = (scriptPath +/+ "../../media/flock").standardizePath;
 sentencesPath = scriptPath +/+ "sentences.txt";
-bike = "whoami".unixCmdGetStdOut.select(_.isDecDigit).asInteger;
 
 // event -> list of sentence numbers
 readSentences = {
@@ -62,10 +63,13 @@ readSentences = {
 scanMedia = {
     var files = Dictionary.new;
     PathName(mediaPath).files.do { |file|
+        // Match decimal digits, then check the numeric voice ID against voiceIds.
         var match = file.fileName.findRegexp("^sentence_([0-9]+)_voice_([0-9]+)\\.wav$");
         if(match.notEmpty) {
             var sentence = match[1][1].asInteger, voice = match[2][1].asInteger;
-            files[sentence] = (files[sentence] ?? { Dictionary.new }).put(voice, file.fullPath);
+            if(config[\voiceIds].includes(voice)) {
+                files[sentence] = (files[sentence] ?? { Dictionary.new }).put(voice, file.fullPath);
+            };
         };
     };
     files
@@ -117,12 +121,8 @@ pickSentence = { |event|
 };
 
 pickVoice = { |sentence|
-    var voices = state[\buffers][sentence];
-    if((config[\voiceMode] == \bike) and: { voices[bike].notNil }) {
-        bike
-    } {
-        voices.keys.asArray.choose
-    }
+    // Choose afresh on every playback, using voices found for this sentence.
+    state[\buffers][sentence].keys.asArray.choose
 };
 
 playSpeech = { |event, now|
@@ -217,10 +217,10 @@ server.waitForBoot({
 OPTIONAL TEST: evaluate these lines ONE AT A TIME.
 
 n = NetAddr("127.0.0.1", NetAddr.langPort);
-n.sendMsg("/object/detected/person", 1);  // plays
+n.sendMsg("/object/detected/person", 1);  // plays with a random voice
 n.sendMsg("/object/detected/person", 1);  // same state, ignored
 n.sendMsg("/object/detected/person", 0);
 n.sendMsg("/object/detected/person", 1);  // skipped: busy or cooldown
-n.sendMsg("/location/flock", 1);          // plays, once nothing is speaking
+n.sendMsg("/location/flock", 1);          // send when idle to play
 ~flockStop.value;
 */
