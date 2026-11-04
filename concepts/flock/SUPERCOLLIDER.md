@@ -38,12 +38,13 @@ What this means for your logic:
 ## How the script works
 
 ```
-OSCdef -> receive -> trigger -> playSpeech -> pickSentence, pickVoice
+OSCdef -> receive -> route -> trigger -> playSpeech -> pickSentence, pickVoice
 ```
 
 | Function | Job |
 |---|---|
-| `receive` | Keeps the last value per event and passes on only 0 to 1 changes |
+| `receive` | Keeps the last value per address and passes on only 0 to 1 changes |
+| `route` | Turns a person inside a zone, or a zone entered with a person in view, into `monitored` |
 | `trigger` | Decides play or skip, in this order: disabled, busy, cooldown |
 | `pickSentence` | Picks a sentence for the event |
 | `pickVoice` | Picks a voice for that sentence |
@@ -51,9 +52,17 @@ OSCdef -> receive -> trigger -> playSpeech -> pickSentence, pickVoice
 
 Rules as they stand:
 
+| Situation | Event | Sentences |
+|---|---|---|
+| A person, outside any zone | `person` | 1 |
+| A car | `car` | 4, 5 |
+| Entering a zone, no person in view | `flock` | 7 |
+| A person and a zone at the same time, whichever came first | `monitored` | 2, 3, 6 |
+
 - Only one sentence plays at a time, across all events.
 - Cooldowns are per event, counted from the start of the last play.
 - A skipped trigger is dropped, not queued. A person who arrives during a cooldown and stays hears nothing.
+- The exception: a `monitored` trigger skipped because something else is speaking is tried again when that speech ends, if the person and the zone are both still there.
 
 ## Where to change things
 
@@ -69,14 +78,14 @@ Rules as they stand:
 - There are two SynthDefs, for mono and stereo files. Change both.
 - Read settings with `config[\key]`, as the script does, because some names collide with Event methods.
 
-To add an event, add it to `addresses`, to `cooldown` and `enabled` in `config`, and to `last`, `lastPlayed` and `position` in `state`. Then add its lines to `sentences.txt`. Talk to whoever owns the Python side if it needs a new OSC address.
+To add an event, add it to `addresses`, to `cooldown` and `enabled` in `config`, and to `last`, `lastPlayed` and `position` in `state`. Then add its lines to `sentences.txt`. Talk to whoever owns the Python side if it needs a new OSC address. An event made from other events, like `monitored`, has no address: leave it out of `addresses` and `last`, and produce it in `route`.
 
 ## Speech files
 
 Name files `sentence_N_voice_M.wav`, where `N` is the first field in `sentences.txt`. Any sample rate, mono or stereo. A line in `sentences.txt` looks like this:
 
 ```
-2|person|You are entering a surveilled area.
+2|monitored|You are entering a surveilled area.
 ```
 
 Files load when the script starts, so restart it after changing them. A sentence without files gets a warning and is skipped.
@@ -89,12 +98,13 @@ Send fake events from the SuperCollider IDE, one line at a time:
 
 ```supercollider
 n = NetAddr("127.0.0.1", NetAddr.langPort);
-n.sendMsg("/object/detected/person", 1);
+n.sendMsg("/object/detected/person", 1);  // person
 n.sendMsg("/object/detected/person", 0);
-n.sendMsg("/location/flock", 1);
+n.sendMsg("/location/flock", 1);          // flock
+n.sendMsg("/object/detected/person", 1);  // monitored
 ```
 
-Every decision goes to the post window: `played person: sentence 3 voice 2`, `skipped flock: busy`, `skipped person: cooldown, 6.1 s left`.
+Every decision goes to the post window: `played monitored: sentence 3 voice 2`, `skipped flock: busy`, `skipped person: cooldown, 6.1 s left`.
 
 On a bike, stop the Python senders before sending fake events, or their repeats will overwrite your values. To test with real senders:
 
@@ -114,7 +124,7 @@ tail -f ~/Desktop/flock_sclang.log | grep -E 'played|skipped'
 
 - Load all audio at startup. Do not call `Buffer.read` inside a trigger; scsynth has a limited number of buffers.
 - Free anything new you create in `cleanup`, so `~flockStop` and reevaluating the script stay clean.
-- Each bike runs its own copy and does not talk to the others yet. `voiceMode: \bike` gives each bike its own voice.
+- Each bike runs its own copy and does not talk to the others yet.
 - The bikes ride in traffic, so avoid sudden loud sounds.
 - If the "Flock speech ready" line shows a port other than 57120, another sclang is running. Stop it first.
 

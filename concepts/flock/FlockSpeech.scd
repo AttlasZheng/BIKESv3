@@ -12,22 +12,28 @@ OSC, one int argument, 1 = entered / present, 0 = left / absent:
     /location/flock           from flock_gps.py
 Senders resend the current state every 2 s. Only a 0 -> 1 change can trigger speech.
 
+A person and a Flock zone at the same time make the \monitored event: a person
+arriving inside a zone, or the bike entering a zone with a person in view.
+Otherwise a person plays \person and a zone plays \flock.
+
 A trigger plays one sentence if its event is enabled, its cooldown has passed
 and nothing else is speaking. Every decision goes to the post window.
+A \monitored trigger that finds something else speaking is retried when that
+speech ends, if the person and the zone are both still there.
 
 Stop and release resources: ~flockStop.value;
 Reevaluate the block to restart.
 */
 (
 var config, addresses, scriptPath, mediaPath, sentencesPath, server, state;
-var readSentences, scanMedia, cleanup, pickSentence, pickVoice, playSpeech, trigger, receive;
+var readSentences, scanMedia, cleanup, pickSentence, pickVoice, playSpeech, trigger, route, receive;
 
 config = (
     oscPort: 57120,            // sclang receiver, not scsynth's 57110
     amp: 0.8,
     out: 0,                    // stereo output channels 0 and 1
-    cooldown: (person: 8, car: 8, flock: 20),  // seconds per event
-    enabled: (person: true, car: true, flock: true),  // stationary vs moving mode
+    cooldown: (person: 8, car: 8, flock: 20, monitored: 8),  // seconds per event
+    enabled: (person: true, car: true, flock: true, monitored: true),  // stationary vs moving mode
     voiceIds: (0..27),         // 28 voices; use (1..28) for filenames numbered 1-28
     order: \random             // \random, or \sequence through the event's sentences
 );
@@ -82,9 +88,10 @@ state = (
     stopped: false, group: nil, stopHook: nil,
     sentences: readSentences.value,
     buffers: Dictionary.new,      // sentence -> voice -> Buffer
-    last: (person: 0, car: 0, flock: 0),
-    lastPlayed: (person: -inf, car: -inf, flock: -inf),
-    position: (person: 0, car: 0, flock: 0),
+    last: (person: 0, car: 0, flock: 0),  // last OSC value per address
+    lastPlayed: (person: -inf, car: -inf, flock: -inf, monitored: -inf),
+    position: (person: 0, car: 0, flock: 0, monitored: 0),
+    retryPending: false,
     busyUntil: -inf
 );
 
@@ -151,7 +158,19 @@ trigger = { |event|
         ("skipped " ++ event ++ ": disabled").postln;
     }
     { now < state[\busyUntil] } {
-        ("skipped " ++ event ++ ": busy").postln;
+        if((event == \monitored) and: { state[\retryPending].not }) {
+            ("skipped " ++ event ++ ": busy, retrying when the speech ends").postln;
+            state[\retryPending] = true;
+            SystemClock.sched(state[\busyUntil] - now + 0.05, {
+                state[\retryPending] = false;
+                if(state[\stopped].not and: { state[\last][\person] != 0 } and: { state[\last][\flock] != 0 }) {
+                    trigger.value(\monitored);
+                };
+                nil
+            });
+        } {
+            ("skipped " ++ event ++ ": busy").postln;
+        };
     }
     { wait > 0 } {
         ("skipped " ++ event ++ ": cooldown, " ++ wait.round(0.1) ++ " s left").postln;
@@ -159,10 +178,16 @@ trigger = { |event|
     { playSpeech.value(event, now) };
 };
 
+// A person and a Flock zone together become \monitored, whichever arrived first.
+route = { |event|
+    var other = (person: \flock, flock: \person)[event];
+    if(other.notNil and: { state[\last][other] != 0 }) { \monitored } { event }
+};
+
 receive = { |event, value|
     var previous = state[\last][event];
     state[\last][event] = value;
-    if((previous == 0) and: { value != 0 }) { trigger.value(event) };
+    if((previous == 0) and: { value != 0 }) { trigger.value(route.value(event)) };
 };
 
 server.waitForBoot({
@@ -173,7 +198,7 @@ server.waitForBoot({
             if(files[n].isNil) { ("no files for sentence " ++ n ++ " (" ++ event ++ ")").warn };
         };
     };
-    addresses.keysDo { |event|
+    config[\enabled].keysDo { |event|
         if(state[\sentences][event].isNil) { ("no sentences for event " ++ event).warn };
     };
 
@@ -217,10 +242,13 @@ server.waitForBoot({
 OPTIONAL TEST: evaluate these lines ONE AT A TIME.
 
 n = NetAddr("127.0.0.1", NetAddr.langPort);
-n.sendMsg("/object/detected/person", 1);  // plays with a random voice
+n.sendMsg("/object/detected/person", 1);  // person only: plays person with a random voice
 n.sendMsg("/object/detected/person", 1);  // same state, ignored
 n.sendMsg("/object/detected/person", 0);
 n.sendMsg("/object/detected/person", 1);  // skipped: busy or cooldown
-n.sendMsg("/location/flock", 1);          // send when idle to play
+n.sendMsg("/object/detected/person", 0);
+n.sendMsg("/location/flock", 1);          // zone only: plays flock when idle
+n.sendMsg("/object/detected/person", 1);  // person inside the zone: plays monitored
+n.sendMsg("/location/flock", 0);
 ~flockStop.value;
 */
