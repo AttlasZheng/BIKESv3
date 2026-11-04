@@ -4,8 +4,9 @@ The bikes announce surveillance out loud. This is the BIKES: Flocking concept (H
 
 Each bike runs two Python processes, one for the camera and one for GPS. Both send OSC events to a local SuperCollider, which plays pre-generated speech through the bike's loudspeaker.
 
-- Stationary: the camera sees a person or a car near a Flock camera, and the bike speaks ("You are entering a surveilled area.").
-- Moving: the GPS position is compared with an offline list of Flock camera coordinates. Entering a zone makes the bike speak ("This is a surveilled area.").
+- Camera: a person in view makes the bike say "Person detected.", and a car makes it say "Vehicle detected." or "Your license plate has been recorded."
+- GPS: the position is compared with an offline list of Flock camera coordinates. Entering a zone makes the bike say "A Flock camera is watching this street."
+- Both: a person in view while the bike is inside a zone makes it say "You are entering a surveilled area.", "Please dismount your bike. You are being monitored." or "This is a surveilled area.". Only this case mentions a surveilled area.
 
 ```
 IMX500 -> flock_camera.py --\
@@ -31,7 +32,7 @@ Everything goes to `127.0.0.1:57120` (the bike's sclang). Senders send on every 
 | `flock_camera.py` | IMX500 detections to `/object/detected/*`. Imports the tracker from `../camera/camera_osc.py`. |
 | `flock_gps.py` | GPS position to `/location/flock` and `/flock/proximity`. Derived from `../flock_detection/flock_gps.py`. |
 | `FlockSpeech.scd` | Receives the events and plays speech. Settings are in `config` at the top. See [SUPERCOLLIDER.md](SUPERCOLLIDER.md) to work on it. |
-| `sentences.txt` | One sentence per line: `N\|event\|text`. Events are `person`, `car`, `flock`. |
+| `sentences.txt` | One sentence per line: `N\|event\|text`. Events are `person`, `car`, `flock`, and `monitored` for a person inside a zone. |
 | `make_placeholder_corpus.py` | Renders `sentences.txt` with espeak-ng into `media/flock/`. |
 | `osc_monitor.py` | Prints all OSC that arrives. |
 | `run_flock.sh` | Starts everything on the bike you are logged in to. |
@@ -81,7 +82,7 @@ From the laptop, at the repo root, after syncing:
 ansible-playbook -i ./utility/config/bikes.ini concepts/flock/flock.yml --limit 10.10.10.11
 ```
 
-Stationary or moving mode is chosen in `config.enabled` at the top of `FlockSpeech.scd`. Cooldowns, volume, voice choice and sentence order are next to it. `voiceMode: \bike` gives each bike its own voice for the chorus.
+Which events speak is chosen in `config.enabled` at the top of `FlockSpeech.scd`. Cooldowns, volume, voice choice and sentence order are next to it.
 
 Only one program can open the camera. `run_flock.sh` stops `camera_osc.py` and old copies of `flock_camera.py` first. If another sclang is running, a new one can end up on port 57121, so check the "Flock speech ready" line.
 
